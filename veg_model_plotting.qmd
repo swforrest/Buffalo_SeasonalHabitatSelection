@@ -1,0 +1,1155 @@
+---
+title: "iSSF Vegetation Model Plotting"
+author: "Scott Forrest and Kyana Pike"
+date: "`r Sys.Date()`"
+execute: 
+  cache: false
+bibliography: references.bib
+toc: true
+number-sections: false
+format: 
+  html:
+    grid:
+      sidebar-width: 100px
+      body-width: 900px
+    self-contained: true
+    code-fold: show
+    code-tools: true
+    df-print: paged
+    code-line-numbers: true
+    code-overflow: scroll
+    fig-format: png
+    fig-dpi: 300
+  pdf:
+    geometry: 
+      - top=30mm
+      - left=30mm
+editor:
+  source
+---
+
+Here we are plotting the results of integrated step selection function (iSSF) models fitted to water buffalo in Arnhem Land. These models contain vegetation categories as a covariate, with interactions for movement parameters.
+
+# Load packages
+
+```{r}
+#| warning=FALSE
+
+library(tidyverse)
+library(TwoStepCLogit) # to make population estimates
+library(sjPlot) # to plot model estimates
+library(glmmTMB)# for the mixed models 
+library(tictoc)
+library(beepr)
+library(lemon)
+library(circular)
+library(amt)
+
+```
+
+# Import data
+
+```{r}
+
+ssf_dat <- read_csv("pheno_start_end_dat_ssf10rs_2024-03-14.csv")
+
+```
+
+## Prepare the data
+
+```{r}
+
+# scale the covariates
+ssf_dat <- ssf_dat %>% mutate(srtm_start_scaled = scale(srtm_start),
+                            srtm_end_scaled = scale(srtm_end),
+                            water_dist_start_scaled = scale(water_dist_start),
+                            water_dist_end_scaled = scale(water_dist_end),
+                            ndvi_start_scaled = scale(ndvi_start),
+                            ndvi_end_scaled = scale(ndvi_end),
+                            nbr_start_scaled = scale(nbr_start),
+                            nbr_end_scaled = scale(nbr_end),
+                            sl_scaled = scale(sl_),
+                            log_sl_scaled = scale(log_sl_),
+                            cos_ta_scaled = scale(cos_ta_)
+)
+
+# get scaling factors
+sl_scale_sd <- attr(ssf_dat$sl_scaled, "scaled:scale")
+log_sl_scale_sd <- attr(ssf_dat$log_sl_scaled, "scaled:scale")
+cos_ta_scale_sd <- attr(ssf_dat$cos_ta_scaled, "scaled:scale")
+
+# rename the pheno categories to set a different reference level
+ssf_dat$pheno_end <- relevel(as.factor(ssf_dat$pheno_end), ref = "shrub_grass")
+ssf_dat$pheno_start <- relevel(as.factor(ssf_dat$pheno_start), ref = "shrub_grass")
+
+unique(ssf_dat$pheno_start)
+unique(ssf_dat$pheno_end)
+
+ssf_dat <- ssf_dat %>% filter(!pheno_start == "saltpan_mudlfat")
+
+# separate the buffalo by season 
+ssfdat_wet <- ssf_dat %>% filter(season=="wet") # wet season
+ssfdat_dry <- ssf_dat %>% filter(season=="dry") # dry season only 
+
+```
+
+
+# Plot the used-available distributions
+
+::: panel-tabset
+
+## Dry season
+
+```{r}
+
+# checking for all individuals
+buffalo_ids <- unique(ssf_dat$id)
+
+# inspect the data for dry season 
+ssfdat_dry %>% 
+  group_by(case_, pheno_end) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(pheno_end, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "Case")+
+  ggtitle("Dry season", subtitle = "All buffalo")+
+  scale_fill_brewer(palette = "Paired", name="Case", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+ggsave("outputs/plots/used-available_all_dry.png", device = "png", 
+       width = 150, height = 90, units = "mm", scale = 1.5, dpi = 1000)
+
+```
+
+### Inspect the data for each buffalo
+
+```{r}
+
+for(i in 1:length(buffalo_ids)) {
+  print(ssfdat_dry %>% filter(id == buffalo_ids[i]) %>%
+          group_by(case_, pheno_end) %>% 
+          summarize(n = n()) %>% 
+          mutate(prop = n / sum(n), 
+                 label = paste0(round(prop * 100, 1), "%")) %>% 
+          ggplot(aes(pheno_end, prop, fill = case_, group=case_,label = label)) + 
+          geom_col(position = position_dodge2()) +
+          geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+          labs(x = "Land use class", y = "Proportion", fill = "case_")+
+          ggtitle("Dry season", subtitle = paste0("Buffalo ", buffalo_ids[i])) +
+          scale_fill_brewer(palette = "Paired", name="Case", 
+                            breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+          theme_light() +
+          theme(axis.text.x = element_text(angle = 20, hjust = 1))
+  )
+}
+
+```
+
+## Wet season
+
+```{r}
+
+ssfdat_wet %>% 
+  group_by(case_, pheno_end) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(pheno_end, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "case_")+
+  ggtitle("Wet season", subtitle = "All buffalo")+
+  scale_fill_brewer(palette = "Paired", name="Case", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+ggsave("outputs/plots/used-available_all_wet.png", device = "png", 
+       width = 150, height = 90, units = "mm", scale = 1.5, dpi = 1000)
+
+```
+
+### For each individual
+
+```{r}
+
+for(i in 1:length(buffalo_ids)) {
+  print(ssfdat_wet %>% filter(id == buffalo_ids[i]) %>%
+          group_by(case_, pheno_end) %>% 
+          summarize(n = n()) %>% 
+          mutate(prop = n / sum(n), 
+                 label = paste0(round(prop * 100, 1), "%")) %>% 
+          ggplot(aes(pheno_end, prop, fill = case_, group=case_,label = label)) + 
+          geom_col(position = position_dodge2()) +
+          geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+          labs(x = "Land use class", y = "Proportion", fill = "case_")+
+          ggtitle("Wet season", subtitle = paste0("Buffalo ", buffalo_ids[i]))+
+          scale_fill_brewer(palette = "Paired", name="Case", 
+                            breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+          theme_light() +
+          theme(axis.text.x = element_text(angle = 20, hjust = 1))
+  )
+}
+
+
+```
+
+:::
+
+# Read in the saved model objects
+
+```{r}
+
+
+buffalo.pheno.dry.mvmt <- readRDS("buffalo_pheno_mixed_diag_mvmt_10rs_shrubgrassref_dry_2025-05-20.rds")
+buffalo.pheno.wet.mvmt <- readRDS("buffalo_pheno_mixed_diag_mvmt_10rs_shrubgrassref_wet_2025-05-20.rds")
+
+```
+
+## Model summaries
+
+```{r}
+
+# Summaries are also printed below
+# summary(buffalo.pheno.dry.mvmt)
+# summary(buffalo.pheno.wet.mvmt)
+
+```
+
+# Model fitting -  interacting with movement
+
+::: panel-tabset
+
+## Dry season
+
+```{r}
+
+tic()
+buffalo.tmp <- glmmTMB(case_ ~ 
+                         pheno_end + 
+                         sl_scaled +
+                         log_sl_scaled +
+                         cos_ta_scaled +
+                         pheno_start:(sl_scaled + log_sl_scaled + cos_ta_scaled) +
+                         (1 | step_id) + 
+                         # (0 + pheno_end | id),
+                         diag(0 + pheno_end | id),
+                       family = poisson(), 
+                       data = ssfdat_dry, 
+                       doFit=FALSE,
+                       control = glmmTMBControl(optimizer = optim, optArgs = list(method="BFGS")))
+
+#' Set variance of random intercept to 10^6
+buffalo.tmp$parameters$theta[1] <- log(1e3)
+nvarparm<-length(buffalo.tmp$parameters$theta)
+buffalo.tmp$mapArg <- list(theta=factor(c(NA,1:(nvarparm-1))))
+
+# to render the script we comment out the model fitting, as we are loading a saved model
+# buffalo.pheno.dry.mvmt <- glmmTMB:::fitTMB(buffalo.tmp)
+
+summary(buffalo.pheno.dry.mvmt) 
+
+toc()
+beep(sound = 2)
+
+# plot result as incidence rate ratios
+# plot_model(buffalo.pheno.dry.mvmt)
+plot_model(buffalo.pheno.dry.mvmt, transform = NULL)
+
+# saveRDS(buffalo.pheno.dry.mvmt, file = paste0("buffalo_pheno_mixed_diag_mvmt_10rs_shrubgrassref_dry_", Sys.Date(), ".rds"))
+# paste0("Model location: buffalo_pheno_mixed_diag_mvmt_10rs_shrubgrassref_dry_", Sys.Date(), ".rds")
+
+```
+
+## Wet season
+
+```{r}
+
+tic()
+buffalo.tmp <- glmmTMB(case_ ~ 
+                         pheno_end + 
+                         sl_scaled +
+                         log_sl_scaled +
+                         cos_ta_scaled +
+                         pheno_start:(sl_scaled + log_sl_scaled + cos_ta_scaled) +
+                         (1 | step_id) + 
+                         # (0 + pheno_end | id),
+                         diag(0 + pheno_end | id),
+                       family=poisson(), 
+                       data = ssfdat_wet, 
+                       doFit=FALSE,
+                       control = glmmTMBControl(optimizer = optim, optArgs = list(method="BFGS")))
+
+#' Set variance of random intercept to 10^6
+buffalo.tmp$parameters$theta[1] <- log(1e3)
+nvarparm<-length(buffalo.tmp$parameters$theta)
+buffalo.tmp$mapArg <- list(theta=factor(c(NA,1:(nvarparm-1))))
+
+# to render the script we comment out the model fitting, as we are loading a saved model
+# buffalo.pheno.wet.mvmt <- glmmTMB:::fitTMB(buffalo.tmp)
+
+summary(buffalo.pheno.wet.mvmt)
+
+toc()
+beep(sound = 2)
+
+# plot result as incidence rate ratios
+# plot_model(buffalo.pheno.wet.mvmt)
+plot_model(buffalo.pheno.wet.mvmt, transform = NULL)
+
+# saveRDS(buffalo.pheno.wet.mvmt, file = paste0("buffalo_pheno_mixed_diag_mvmt_10rs_shrubgrassref_wet_", Sys.Date(), ".rds"))
+# paste0("Model location: buffalo_pheno_mixed_diag_mvmt_10rs_shrubgrassref_wet_", Sys.Date(), ".rds")
+
+```
+
+:::
+
+## Plot both models 
+
+```{r}
+
+# plot_model(buffalo.pheno.dry.mvmt)
+# plot_model(buffalo.pheno.wet.mvmt)
+# 
+# plot_model(buffalo.pheno.dry.mvmt, transform = NULL)
+# plot_model(buffalo.pheno.wet.mvmt, transform = NULL)
+
+```
+
+# Create manuscript figures
+
+::: panel-tabset
+
+## Dry season
+
+```{r}
+
+coef_df <- data.frame("model_covariate" = names(fixef(buffalo.pheno.dry.mvmt)$cond),
+                      "Covariate" = c("Intercept", "Floodplain", "DryGrassland", "OpenForest", "TreeGrass", 
+                                      "sl", "log(sl)", "cos(ta)", 
+                                      "sl:Floodplain", "sl:DryGrassland", "sl:OpenForest", "sl:TreeGrass",
+                                      "log(sl):Floodplain", "log(sl):DryGrassland", "log(sl):OpenForest", "log(sl):TreeGrass",
+                                      "cos(ta):Floodplain", "cos(ta):DryGrassland", "cos(ta):OpenForest", "cos(ta):TreeGrass"
+                                      ),
+                      "Estimate" = coef(summary(buffalo.pheno.dry.mvmt))$cond[, "Estimate"],
+                      "SE" = coef(summary(buffalo.pheno.dry.mvmt))$cond[, "Std. Error"]
+) %>%
+  
+  mutate(
+    # Calculate confidence intervals
+    LCI_90 = Estimate - qnorm(1 - (1 - 0.90) / 2) * SE, 
+    UCI_90 = Estimate + qnorm(1 - (1 - 0.90) / 2) * SE,
+    LCI_95 = Estimate - qnorm(1 - (1 - 0.95) / 2) * SE,
+    UCI_95 = Estimate + qnorm(1 - (1 - 0.95) / 2) * SE,
+    LCI_99 = Estimate - qnorm(1 - (1 - 0.99) / 2) * SE,
+    UCI_99 = Estimate + qnorm(1 - (1 - 0.99) / 2) * SE,
+    # Compute p-values
+    pvalue = 2 * pnorm(-abs(Estimate) / SE)
+  )
+
+# Add stars indicating the significance
+coef_df$Significance <- sapply(1:nrow(coef_df), function(x){
+  if (coef_df$pvalue[x] <= 0.001){
+    return("***")
+  } else if (coef_df$pvalue[x] <= 0.01) {
+    return("**")
+  } else if (coef_df$pvalue[x] <= 0.05) {
+    return("*")
+  }
+})
+
+# Remove the intercept term
+coef_df <- coef_df %>% filter(Covariate != "Intercept")
+
+# Add a column indicating the preference
+coef_df$Preference <- ifelse(coef_df$Estimate > 0, "Preferred", "Avoided")
+coef_df$Preference <- factor(coef_df$Preference, levels = c("Avoided", "Preferred"))
+
+# Specify the order in which the coefficients should be plotted
+order <- c(
+  "Floodplain",
+  "DryGrassland",
+  "OpenForest",
+  "TreeGrass",
+  "sl",
+  "log(sl)",
+  "cos(ta)",
+  "sl:Floodplain",
+  "sl:DryGrassland",
+  "sl:OpenForest",
+  "sl:TreeGrass",
+  "log(sl):Floodplain",
+  "log(sl):DryGrassland",
+  "log(sl):OpenForest",
+  "log(sl):TreeGrass",
+  "cos(ta):Floodplain",
+  "cos(ta):DryGrassland",
+  "cos(ta):OpenForest",
+  "cos(ta):TreeGrass"
+)
+
+# Specify the order in which the coefficients should be plotted
+order_no_mvmt <- c(
+  "Floodplain",
+  "DryGrassland",
+  "OpenForest",
+  "TreeGrass"
+)
+
+# Prepare dataset for plotting confidence intervals
+coef_df2 <- coef_df %>%
+  dplyr::select(Covariate, Estimate, Preference, LCI_90:UCI_99) %>%
+  gather(key = confidence_level, value = value, LCI_90:UCI_99) %>%
+  separate(col = confidence_level, into = c("Type", "Level"), sep = "_") %>%
+  spread(key = Type, value = value) %>%
+  mutate(Level = paste0(Level, "%"))
+
+coef_df2_no_mvmt <- coef_df %>% filter(str_detect(model_covariate, "pheno_end")) %>%
+  dplyr::select(Covariate, Estimate, Preference, LCI_90:UCI_99) %>%
+  gather(key = confidence_level, value = value, LCI_90:UCI_99) %>%
+  separate(col = confidence_level, into = c("Type", "Level"), sep = "_") %>%
+  spread(key = Type, value = value) %>%
+  mutate(Level = paste0(Level, "%"))
+
+```
+
+### Plot the coefficients
+
+```{r}
+
+min_x <- -0.5
+max_x <- 0.8
+
+# coefficients on the x-axis
+dry_mvmt_plot <- ggplot(data = coef_df, 
+                        aes(y = Covariate, x = Estimate, col = factor(Preference))) +
+  geom_vline(xintercept = 0, color = "black", lty = 2, lwd = 0.3) +
+  annotate(geom = "segment",
+           x      = min_x, xend = max_x,
+           y      = 12.5, yend   = 12.5,
+           colour = "gray80", lty = 1, lwd = 0.3) +
+  annotate(geom = "segment",
+           x      = min_x, xend = max_x,
+           y      = 15.5, yend   = 15.5,
+           colour = "gray80", lty = 1, lwd = 0.3) +
+  geom_point(shape = 3, size = 2.5) +
+  # drop the filter argument when plotting all covariates
+  geom_errorbarh(data = coef_df2,
+                 aes(xmin = LCI, xmax = UCI, linewidth = factor(Level)), 
+                 height = 0, alpha  = 0.5) +
+  geom_text(aes(label = Significance, hjust = 0.5, vjust = 0), 
+            show.legend = F) +
+  scale_y_discrete(limits = rev(order)) + 
+  theme_classic() +
+  scale_x_continuous(limits = c(min_x, max_x), breaks = seq(min_x, max_x, 0.25)) +
+  coord_capped_cart(left = "both", bottom = "both") +
+  labs(x = expression(beta*"-Estimate")) +
+  scale_color_manual(name   = "Preference", 
+                     values = c("#FF8123", "#9B4200")) +
+  scale_linewidth_manual(name   = "Confidence Level", 
+                         values = c(2, 1, 0.3)) +
+  # ggtitle("Dry season") +
+  theme(legend.position   = "bottom",
+        legend.margin     = margin(0, 50, 0, -20),
+        legend.box.margin = margin(-5, -10, -5, -10),
+        legend.text       = element_text(face = 3),
+        legend.title      = element_text(face = 3)) +
+  guides(colour = guide_legend(title.position = "top", title.hjust = 0.5),
+         linewidth   = guide_legend(title.position = "top", title.hjust = 0.5, 
+                                    override.aes = list(colour = "#FF8123")))
+
+dry_mvmt_plot
+
+ggsave(paste0("outputs/plots/pheno_model_mixed_diag_dry_mvmt_", Sys.Date(), ".png"), device = "png", 
+       width = 150, height = 150, units = "mm", scale = 1, dpi = 600)
+
+```
+
+### Drop the filter argument when plotting all covariates
+
+```{r}
+
+dry_mvmt_plot <- ggplot(data = coef_df %>% filter(str_detect(model_covariate, "pheno_end")), 
+                        aes(y = Covariate, x = Estimate, col = factor(Preference))) +
+  geom_vline(xintercept = 0, color = "black", lty = 2, lwd = 0.3) +
+  geom_point(shape = 3, size = 2.5) +
+  # drop the filter argument when plotting all covariates
+  geom_errorbarh(data = coef_df2_no_mvmt,
+                 aes(xmin = LCI, xmax = UCI, linewidth = factor(Level)), 
+                 height = 0, alpha  = 0.5) +
+  geom_text(aes(label = Significance, hjust = 0.5, vjust = 0), 
+            show.legend = F) +
+  # scale_y_discrete(limits = rev(order)) + 
+  scale_y_discrete(limits = rev(order_no_mvmt)) + 
+  theme_classic() +
+  scale_x_continuous(limits = c(min_x, max_x), breaks = seq(min_x, max_x, 0.25)) +
+  coord_capped_cart(left = "both", bottom = "both") +
+  labs(x = expression(beta*"-Estimate")) +
+  scale_color_manual(name   = "Preference", 
+                     values = c("#FF8123", "#9B4200")) +
+  scale_linewidth_manual(name   = "Confidence Level", 
+                         values = c(2, 1, 0.3)) +
+  theme(legend.position   = "bottom",
+        legend.margin     = margin(0, 50, 0, -20),
+        legend.box.margin = margin(-5, -10, -5, -10),
+        legend.text       = element_text(face = 3),
+        legend.title      = element_text(face = 3)) +
+  guides(colour = guide_legend(title.position = "top", title.hjust = 0.5),
+         linewidth   = guide_legend(title.position = "top", title.hjust = 0.5, 
+                                    override.aes = list(colour = "#FF8123")))
+
+dry_mvmt_plot
+
+ggsave(paste0("outputs/plots/pheno_model_mixed_diag_dry_mvmt_WITHOUT_MVMT_", Sys.Date(), ".png"), device = "png", 
+       width = 150, height = 60, units = "mm", scale = 1, dpi = 600)
+
+```
+
+## Wet season
+
+```{r}
+
+coef_df <- data.frame("model_covariate" = names(fixef(buffalo.pheno.wet.mvmt)$cond),
+                      "Covariate" = c("Intercept", "Floodplain", "DryGrassland", "OpenForest", "TreeGrass", 
+                                      "sl", "log(sl)", "cos(ta)", 
+                                      "sl:Floodplain", "sl:DryGrassland", "sl:OpenForest", "sl:TreeGrass",
+                                      "log(sl):Floodplain", "log(sl):DryGrassland", "log(sl):OpenForest", "log(sl):TreeGrass",
+                                      "cos(ta):Floodplain", "cos(ta):DryGrassland", "cos(ta):OpenForest", "cos(ta):TreeGrass"
+                                      ),
+                      "Estimate" = coef(summary(buffalo.pheno.wet.mvmt))$cond[, "Estimate"],
+                      "SE" = coef(summary(buffalo.pheno.wet.mvmt))$cond[, "Std. Error"]
+) %>%
+  
+  mutate(
+    # Calculate confidence intervals
+    LCI_90 = Estimate - qnorm(1 - (1 - 0.90) / 2) * SE, 
+    UCI_90 = Estimate + qnorm(1 - (1 - 0.90) / 2) * SE,
+    LCI_95 = Estimate - qnorm(1 - (1 - 0.95) / 2) * SE,
+    UCI_95 = Estimate + qnorm(1 - (1 - 0.95) / 2) * SE,
+    LCI_99 = Estimate - qnorm(1 - (1 - 0.99) / 2) * SE,
+    UCI_99 = Estimate + qnorm(1 - (1 - 0.99) / 2) * SE,
+    # Compute p-values
+    pvalue = 2 * pnorm(-abs(Estimate) / SE)
+  )
+
+# Add stars indicating the significance
+coef_df$Significance <- sapply(1:nrow(coef_df), function(x){
+  if (coef_df$pvalue[x] <= 0.001){
+    return("***")
+  } else if (coef_df$pvalue[x] <= 0.01) {
+    return("**")
+  } else if (coef_df$pvalue[x] <= 0.05) {
+    return("*")
+  }
+})
+
+# Remove the intercept term
+coef_df <- coef_df %>% filter(Covariate != "Intercept")
+
+# Add a column indicating the preference
+coef_df$Preference <- ifelse(coef_df$Estimate > 0, "Preferred", "Avoided")
+coef_df$Preference <- factor(coef_df$Preference, levels = c("Avoided", "Preferred"))
+
+# Prepare dataset for plotting confidence intervals
+coef_df2 <- coef_df %>%
+  dplyr::select(Covariate, Estimate, Preference, LCI_90:UCI_99) %>%
+  gather(key = confidence_level, value = value, LCI_90:UCI_99) %>%
+  separate(col = confidence_level, into = c("Type", "Level"), sep = "_") %>%
+  spread(key = Type, value = value) %>%
+  mutate(Level = paste0(Level, "%"))
+
+coef_df2_no_mvmt <- coef_df %>% filter(str_detect(model_covariate, "pheno_end")) %>%
+  dplyr::select(Covariate, Estimate, Preference, LCI_90:UCI_99) %>%
+  gather(key = confidence_level, value = value, LCI_90:UCI_99) %>%
+  separate(col = confidence_level, into = c("Type", "Level"), sep = "_") %>%
+  spread(key = Type, value = value) %>%
+  mutate(Level = paste0(Level, "%"))
+
+```
+
+### Plot the coefficients
+
+```{r}
+
+# coefficients on the x-axis
+wet_mvmt_plot <- ggplot(data = coef_df, 
+                        aes(y = Covariate, x = Estimate, col = factor(Preference))) +
+  geom_vline(xintercept = 0, color = "black", lty = 2, lwd = 0.3) +
+  annotate(geom = "segment",
+           x      = min_x, xend = max_x,
+           y      = 12.5, yend   = 12.5,
+           colour = "gray80", lty = 1, lwd = 0.3) +
+  annotate(geom = "segment",
+           x      = min_x, xend = max_x,
+           y      = 15.5, yend   = 15.5,
+           colour = "gray80", lty = 1, lwd = 0.3) +
+  geom_point(shape = 3, size = 2.5) +
+  geom_point(shape = 3, size = 2.5) +
+  geom_errorbarh(data = coef_df2,
+                 aes(xmin = LCI, xmax = UCI, linewidth = factor(Level)), 
+                 height = 0, alpha  = 0.5) +
+  geom_text(aes(label = Significance, hjust = 0.5, vjust = 0), 
+            show.legend = F) +
+  scale_y_discrete(limits = rev(order)) +
+  theme_classic() +
+  scale_x_continuous(limits = c(min_x, max_x), breaks = seq(min_x, max_x, 0.25)) +
+  coord_capped_cart(left = "both", bottom = "both") +
+  labs(x = expression(beta*"-Estimate")) +
+  scale_color_manual(name   = "Preference", 
+                     values = c("#238DFF", "#004691")) +
+  scale_linewidth_manual(name   = "Confidence Level", 
+                         values = c(2, 1, 0.3)) +
+  theme(legend.position   = "bottom",
+        legend.margin     = margin(0, 50, 0, -20),
+        legend.box.margin = margin(-5, -10, -5, -10),
+        legend.text       = element_text(face = 3),
+        legend.title      = element_text(face = 3)) +
+  guides(colour = guide_legend(title.position = "top", title.hjust = 0.5),
+         linewidth   = guide_legend(title.position = "top", title.hjust = 0.5, 
+                                    override.aes = list(colour = "#1377E2")))
+
+wet_mvmt_plot
+
+ggsave(paste0("outputs/plots/pheno_model_mixed_diag_wet_mvmt_", Sys.Date(), ".png"), device = "png", 
+       width = 150, height = 150, units = "mm", scale = 1, dpi = 600)
+
+```
+
+### Drop the filter argument when plotting all covariates
+
+```{r}
+
+wet_mvmt_plot <- ggplot(data = coef_df %>% filter(str_detect(model_covariate, "pheno_end")), 
+                        aes(y = Covariate, x = Estimate, col = factor(Preference))) +
+  geom_vline(xintercept = 0, color = "black", lty = 2, lwd = 0.3) +
+  geom_point(shape = 3, size = 2.5) +
+  geom_errorbarh(data = coef_df2_no_mvmt,
+                 aes(xmin = LCI, xmax = UCI, linewidth = factor(Level)), 
+                 height = 0, alpha  = 0.5) +
+  geom_text(aes(label = Significance, hjust = 0.5, vjust = 0), 
+            show.legend = F) +
+  scale_y_discrete(limits = rev(order_no_mvmt)) + 
+  theme_classic() +
+  scale_x_continuous(limits = c(min_x, max_x), breaks = seq(min_x, max_x, 0.25)) +
+  coord_capped_cart(left = "both", bottom = "both") +
+  labs(x = expression(beta*"-Estimate")) +
+  scale_color_manual(name   = "Preference", 
+                     values = c("#238DFF", "#004691")) +
+  scale_linewidth_manual(name   = "Confidence Level", 
+                         values = c(2, 1, 0.3)) +
+  theme(legend.position   = "bottom",
+        legend.margin     = margin(0, 50, 0, -20),
+        legend.box.margin = margin(-5, -10, -5, -10),
+        legend.text       = element_text(face = 3),
+        legend.title      = element_text(face = 3)) +
+  guides(colour = guide_legend(title.position = "top", title.hjust = 0.5),
+         linewidth   = guide_legend(title.position = "top", title.hjust = 0.5, 
+                                    override.aes = list(colour = "#1377E2")))
+
+wet_mvmt_plot
+
+ggsave(paste0("outputs/plots/pheno_model_mixed_diag_wet_mvmt_WITHOUT_MVMT_", Sys.Date(), ".png"), device = "png", 
+       width = 150, height = 60, units = "mm", scale = 1, dpi = 600)
+
+```
+
+:::
+
+# Updating movement parameters, with vegetation interactions
+
+```{r}
+
+# from the step generation script
+tentative_shape <- 0.438167
+tentative_scale <- 534.3507
+tentative_kappa <- 0.1848126
+
+sl_extent <- 1000 # metres
+sl_dry <- data.frame(x = seq(0, sl_extent, length.out = 1001))
+
+```
+
+::: panel-tabset
+
+## Dry season
+
+```{r}
+
+coef_df_dry_mvmt_mvparams <- data.frame("covariate" = names(fixef(buffalo.pheno.dry.mvmt)$cond),
+                           "scaled_coefficient" = coef(summary(buffalo.pheno.dry.mvmt))$cond[, "Estimate"])
+
+# step length coefficients
+sl_dry_mvmt_mvparams <- coef_df_dry_mvmt_mvparams %>% filter(grepl("sl_scaled", covariate) & !grepl("log", covariate)) 
+sl_dry_mvmt_mvparams <- sl_dry_mvmt_mvparams %>% mutate(
+  scale_factor = sl_scale_sd,
+  nat_coef = scaled_coefficient / scale_factor,
+  pheno = c("Intercept", "Floodplain", "DryGrassland", "OpenForest", "TreeGrass"))
+  
+# log step length coefficients
+log_sl_dry_mvmt_mvparams <- coef_df_dry_mvmt_mvparams %>% filter(grepl("log_sl_scaled", covariate)) 
+log_sl_dry_mvmt_mvparams <- log_sl_dry_mvmt_mvparams %>% mutate(
+  scale_factor = log_sl_scale_sd,
+  nat_coef = scaled_coefficient / scale_factor,
+  pheno = c("Intercept", "Floodplain", "DryGrassland", "OpenForest", "TreeGrass"))
+
+# turning angle coefficients
+cos_ta_dry_mvmt_mvparams <- coef_df_dry_mvmt_mvparams %>% filter(grepl("cos_ta_scaled", covariate)) 
+cos_ta_dry_mvmt_mvparams <- cos_ta_dry_mvmt_mvparams %>% mutate(
+  scale_factor = cos_ta_scale_sd,
+  nat_coef = scaled_coefficient / scale_factor,
+  pheno = c("Intercept", "Floodplain", "DryGrassland", "OpenForest", "TreeGrass"))
+
+tentative_mean_sl <- tentative_shape * tentative_scale
+
+# shrub_grass
+shrub_grass_mvmt_dry <- data.frame(
+  "pheno" = "ShrubGrass",
+  "updated_shape" = tentative_shape + log_sl_dry_mvmt_mvparams$nat_coef[1],
+  "updated_scale" = 1/((1/tentative_scale) - sl_dry_mvmt_mvparams$nat_coef[1]),
+  "updated_kappa" = tentative_kappa + cos_ta_dry_mvmt_mvparams$nat_coef[1]
+)
+
+shrub_grass_mean_sl_dry <- shrub_grass_mvmt_dry$updated_shape * shrub_grass_mvmt_dry$updated_scale
+
+# floodplain
+floodplain_mvmt_dry <- data.frame(
+  "pheno" = "Floodplain",
+  "updated_shape" = tentative_shape + log_sl_dry_mvmt_mvparams$nat_coef[1] + log_sl_dry_mvmt_mvparams$nat_coef[2],
+  "updated_scale" = 1/((1/tentative_scale) - (sl_dry_mvmt_mvparams$nat_coef[1] + sl_dry_mvmt_mvparams$nat_coef[2])),
+  "updated_kappa" = tentative_kappa + cos_ta_dry_mvmt_mvparams$nat_coef[1] + cos_ta_dry_mvmt_mvparams$nat_coef[2]
+)
+
+floodplain_mean_sl_dry <- floodplain_mvmt_dry$updated_shape * floodplain_mvmt_dry$updated_scale
+
+# dry_grassland
+dry_grassland_mvmt_dry <- data.frame(
+  "pheno" = "DryGrassland",
+  "updated_shape" = tentative_shape + log_sl_dry_mvmt_mvparams$nat_coef[1] + log_sl_dry_mvmt_mvparams$nat_coef[3],
+  "updated_scale" = 1/((1/tentative_scale) - (sl_dry_mvmt_mvparams$nat_coef[1] + sl_dry_mvmt_mvparams$nat_coef[3])),
+  "updated_kappa" = tentative_kappa + cos_ta_dry_mvmt_mvparams$nat_coef[1] + cos_ta_dry_mvmt_mvparams$nat_coef[3]
+)
+
+dry_grassland_mean_sl_dry <- dry_grassland_mvmt_dry$updated_shape * dry_grassland_mvmt_dry$updated_scale
+
+# open_forest
+open_forest_mvmt_dry <- data.frame(
+  "pheno" = "OpenForest",
+  "updated_shape" = tentative_shape + log_sl_dry_mvmt_mvparams$nat_coef[1] + log_sl_dry_mvmt_mvparams$nat_coef[4],
+  "updated_scale" = 1/((1/tentative_scale) - (sl_dry_mvmt_mvparams$nat_coef[1] + sl_dry_mvmt_mvparams$nat_coef[4])),
+  "updated_kappa" = tentative_kappa + cos_ta_dry_mvmt_mvparams$nat_coef[1] + cos_ta_dry_mvmt_mvparams$nat_coef[4]
+)
+
+open_forest_mean_sl_dry <- open_forest_mvmt_dry$updated_shape * open_forest_mvmt_dry$updated_scale
+
+# tree_grass
+tree_grass_mvmt_dry <- data.frame(
+  "pheno" = "TreeGrass",
+  "updated_shape" = tentative_shape + log_sl_dry_mvmt_mvparams$nat_coef[1] + log_sl_dry_mvmt_mvparams$nat_coef[5],
+  "updated_scale" = 1/((1/tentative_scale) - (sl_dry_mvmt_mvparams$nat_coef[1] + sl_dry_mvmt_mvparams$nat_coef[5])),
+  "updated_kappa" = tentative_kappa + cos_ta_dry_mvmt_mvparams$nat_coef[1] + cos_ta_dry_mvmt_mvparams$nat_coef[5]
+)
+
+tree_grass_mean_sl_dry <- tree_grass_mvmt_dry$updated_shape * tree_grass_mvmt_dry$updated_scale
+
+```
+
+### Creating Gamma distributions 
+
+```{r}
+
+sl_dry_mvmt <- data.frame(x = seq(0, sl_extent, length.out = 1001))
+
+# Tentative distribution
+sl_dry_mvmt$Tentative <- dgamma(x = sl_dry_mvmt$x,
+                                 shape = tentative_shape,
+                                 scale = tentative_scale)
+# Shrub grass
+sl_dry_mvmt$ShrubGrass <- dgamma(x = sl_dry_mvmt$x,
+                             shape = shrub_grass_mvmt_dry$updated_shape,
+                             scale = shrub_grass_mvmt_dry$updated_scale)
+# Bare ground
+sl_dry_mvmt$Floodplain <- dgamma(x = sl_dry_mvmt$x,
+                             shape = floodplain_mvmt_dry$updated_shape,
+                             scale = floodplain_mvmt_dry$updated_scale)
+# Dry grassland
+sl_dry_mvmt$DryGrassland <- dgamma(x = sl_dry_mvmt$x,
+                             shape = dry_grassland_mvmt_dry$updated_shape,
+                             scale = dry_grassland_mvmt_dry$updated_scale)
+# Open forest
+sl_dry_mvmt$OpenForest <- dgamma(x = sl_dry_mvmt$x,
+                             shape = open_forest_mvmt_dry$updated_shape,
+                             scale = open_forest_mvmt_dry$updated_scale)
+# Tree grass
+sl_dry_mvmt$TreeGrass <- dgamma(x = sl_dry_mvmt$x,
+                             shape = tree_grass_mvmt_dry$updated_shape,
+                             scale = tree_grass_mvmt_dry$updated_scale)
+
+# Pivot from wide to long data
+sl_dry_mvmt <- sl_dry_mvmt %>% 
+  pivot_longer(cols = -x)
+
+# Specify the order in which the coefficients should be plotted
+order <- c(
+  "ShrubGrass",
+  "Floodplain",
+  "DryGrassland",
+  "OpenForest",
+  "TreeGrass",
+  "Tentative"
+)
+
+sl_dry_mvmt$name <- factor(sl_dry_mvmt$name, levels = order)
+
+
+mean_values <- c("ShrubGrass" = round(shrub_grass_mean_sl_dry, 1),
+                 "Floodplain" = round(floodplain_mean_sl_dry, 1), 
+                 "DryGrassland" = round(dry_grassland_mean_sl_dry, 1), 
+                 "OpenForest" = round(open_forest_mean_sl_dry, 1), 
+                 "TreeGrass" = round(tree_grass_mean_sl_dry, 1), 
+                 "Tentative" = round(tentative_mean_sl, 1))
+
+# Construct dynamic labels
+labels <- paste(names(mean_values), ": Mean SL = ", mean_values, sep = "")
+
+# Plot
+ggplot(sl_dry_mvmt, aes(x = x, y = value, color = name, linetype = name)) +
+  geom_line(alpha = 0.75, linewidth = 1) +
+  scale_x_continuous("Step Length (m)", limits = c(0,1000)) +
+  scale_y_continuous("Probability Density", limits = c(0, 0.01)) +
+  scale_colour_manual("Habitat",
+                      values = c("ShrubGrass" = "#999900",
+                                 "Floodplain" = "#3399FF",
+                                 "DryGrassland" = "#CC9900",
+                                 "OpenForest" = "#006600",
+                                 "TreeGrass" = "#00CC66",
+                                 "Tentative" = "black"),
+                      labels = labels) +
+  scale_linetype_manual("Habitat", 
+                        values = c("ShrubGrass" = "solid", 
+                                   "Floodplain" = "solid", 
+                                   "DryGrassland" = "solid", 
+                                   "OpenForest" = "solid", 
+                                   "TreeGrass" = "solid", 
+                                   "Tentative" = "dotted"),
+                        labels = labels) +
+  theme_bw() +
+  theme(legend.position = c(0.65, 0.65))
+
+ggsave(paste0("outputs/plots/pheno_model_mixed_diag_sl_dry_mvmt_", Sys.Date(), ".png"), device = "png", 
+       width = 150, height = 100, units = "mm", scale = 1, dpi = 1000)
+
+```
+
+### Creating von Mises distributions 
+
+```{r}
+#| warning= FALSE
+
+ta_dry_mvmt <- data.frame(x = seq(-pi, pi, length.out = 101))
+
+# Tentative distribution
+ta_dry_mvmt$Tentative <- circular::dvonmises(x = ta_dry_mvmt$x,
+                                          mu = 0,
+                                          kappa = tentative_kappa)
+# Shrub grass
+ta_dry_mvmt$ShrubGrass <- circular::dvonmises(x = ta_dry_mvmt$x,
+                                          mu = 0,
+                                          kappa = shrub_grass_mvmt_dry$updated_kappa)
+# Bare ground
+ta_dry_mvmt$Floodplain <- circular::dvonmises(x = ta_dry_mvmt$x,
+                                          mu = 0,
+                                          kappa = floodplain_mvmt_dry$updated_kappa)
+# Dry grassland
+ta_dry_mvmt$DryGrassland <- circular::dvonmises(x = ta_dry_mvmt$x,
+                                          mu = 0,
+                                          kappa = dry_grassland_mvmt_dry$updated_kappa)
+# Open forest
+ta_dry_mvmt$OpenForest <- circular::dvonmises(x = ta_dry_mvmt$x,
+                                          mu = 0,
+                                          kappa = open_forest_mvmt_dry$updated_kappa)
+# Tree grass
+ta_dry_mvmt$TreeGrass <- circular::dvonmises(x = ta_dry_mvmt$x,
+                                          mu = 0,
+                                          kappa = tree_grass_mvmt_dry$updated_kappa)
+
+# Pivot from wide to long data
+ta_dry_mvmt <- ta_dry_mvmt %>% 
+  pivot_longer(cols = -x)
+
+ta_dry_mvmt$name <- factor(ta_dry_mvmt$name, levels = order)
+
+# Plot
+ggplot(ta_dry_mvmt, 
+       aes(x = x, y = value, color = factor(name), linetype = factor(name))
+       ) +
+  geom_line(alpha = 0.75, linewidth = 1) +
+  xlab("Turning angle (radians)") +
+  scale_y_continuous("Probability Density", limits = c(0.10, 0.215)) +
+  scale_x_continuous(breaks = c(-pi, -pi/2, 0, pi/2, pi),
+                     labels = c(expression(-pi, -pi/2, 0, pi/2, pi))) +
+  scale_colour_manual("Habitat",
+                      values = c("ShrubGrass" = "#999900",
+                                 "Floodplain" = "#3399FF",
+                                 "DryGrassland" = "#CC9900",
+                                 "OpenForest" = "#006600",
+                                 "TreeGrass" = "#00CC66",
+                                 "Tentative" = "black")) +
+  scale_linetype_manual("Habitat", 
+                        values = c("ShrubGrass" = "solid", 
+                                   "Floodplain" = "solid", 
+                                   "DryGrassland" = "solid", 
+                                   "OpenForest" = "solid", 
+                                   "TreeGrass" = "solid", 
+                                   "Tentative" = "dotted")) +
+  # scale_colour_viridis_d("Habitat", option = "D") +
+  # ggtitle("Dry season") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggsave(paste0("outputs/plots/pheno_model_mixed_diag_ta_dry_mvmt_", Sys.Date(), ".png"), device = "png", 
+       width = 150, height = 100, units = "mm", scale = 1, dpi = 600)
+
+```
+
+## Wet season
+
+```{r}
+
+coef_df_wet_mvmt_mvparams <- data.frame("covariate" = names(fixef(buffalo.pheno.wet.mvmt)$cond),
+                                        "scaled_coefficient" = coef(summary(buffalo.pheno.wet.mvmt))$cond[, "Estimate"])
+
+# step length coefficients
+sl_wet_mvmt_mvparams <- coef_df_wet_mvmt_mvparams %>% filter(grepl("sl_scaled", covariate) & !grepl("log", covariate)) 
+sl_wet_mvmt_mvparams <- sl_wet_mvmt_mvparams %>% mutate(
+  scale_factor = sl_scale_sd,
+  nat_coef = scaled_coefficient / scale_factor,
+  pheno = c("Intercept", "Floodplain", "DryGrassland", "OpenForest", "TreeGrass"))
+
+# log step length coefficients
+log_sl_wet_mvmt_mvparams <- coef_df_wet_mvmt_mvparams %>% filter(grepl("log_sl_scaled", covariate)) 
+log_sl_wet_mvmt_mvparams <- log_sl_wet_mvmt_mvparams %>% mutate(
+  scale_factor = log_sl_scale_sd,
+  nat_coef = scaled_coefficient / scale_factor,
+  pheno = c("Intercept", "Floodplain", "DryGrassland", "OpenForest", "TreeGrass"))
+
+# turning angle coefficients
+cos_ta_wet_mvmt_mvparams <- coef_df_wet_mvmt_mvparams %>% filter(grepl("cos_ta_scaled", covariate)) 
+cos_ta_wet_mvmt_mvparams <- cos_ta_wet_mvmt_mvparams %>% mutate(
+  scale_factor = cos_ta_scale_sd,
+  nat_coef = scaled_coefficient / scale_factor,
+  pheno = c("Intercept", "Floodplain", "DryGrassland", "OpenForest", "TreeGrass"))
+
+# shrub_grass
+shrub_grass_mvmt_wet <- data.frame(
+  "pheno" = "ShrubGrass",
+  "updated_shape" = tentative_shape + log_sl_wet_mvmt_mvparams$nat_coef[1],
+  "updated_scale" = 1/((1/tentative_scale) - sl_wet_mvmt_mvparams$nat_coef[1]),
+  "updated_kappa" = tentative_kappa + cos_ta_wet_mvmt_mvparams$nat_coef[1]
+)
+
+shrub_grass_mean_sl_wet <- shrub_grass_mvmt_wet$updated_shape * shrub_grass_mvmt_wet$updated_scale
+
+# floodplain
+floodplain_mvmt_wet <- data.frame(
+  "pheno" = "Floodplain",
+  "updated_shape" = tentative_shape + log_sl_wet_mvmt_mvparams$nat_coef[1] + log_sl_wet_mvmt_mvparams$nat_coef[2],
+  "updated_scale" = 1/((1/tentative_scale) - (sl_wet_mvmt_mvparams$nat_coef[1] + sl_wet_mvmt_mvparams$nat_coef[2])),
+  "updated_kappa" = tentative_kappa + cos_ta_wet_mvmt_mvparams$nat_coef[1] + cos_ta_wet_mvmt_mvparams$nat_coef[2]
+)
+
+floodplain_mean_sl_wet <- floodplain_mvmt_wet$updated_shape * floodplain_mvmt_wet$updated_scale
+
+# dry_grassland
+dry_grassland_mvmt_wet <- data.frame(
+  "pheno" = "wetGrassland",
+  "updated_shape" = tentative_shape + log_sl_wet_mvmt_mvparams$nat_coef[1] + log_sl_wet_mvmt_mvparams$nat_coef[3],
+  "updated_scale" = 1/((1/tentative_scale) - (sl_wet_mvmt_mvparams$nat_coef[1] + sl_wet_mvmt_mvparams$nat_coef[3])),
+  "updated_kappa" = tentative_kappa + cos_ta_wet_mvmt_mvparams$nat_coef[1] + cos_ta_wet_mvmt_mvparams$nat_coef[3]
+)
+
+dry_grassland_mean_sl_wet <- dry_grassland_mvmt_wet$updated_shape * dry_grassland_mvmt_wet$updated_scale
+
+# open_forest
+open_forest_mvmt_wet <- data.frame(
+  "pheno" = "OpenForest",
+  "updated_shape" = tentative_shape + log_sl_wet_mvmt_mvparams$nat_coef[1] + log_sl_wet_mvmt_mvparams$nat_coef[4],
+  "updated_scale" = 1/((1/tentative_scale) - (sl_wet_mvmt_mvparams$nat_coef[1] + sl_wet_mvmt_mvparams$nat_coef[4])),
+  "updated_kappa" = tentative_kappa + cos_ta_wet_mvmt_mvparams$nat_coef[1] + cos_ta_wet_mvmt_mvparams$nat_coef[4]
+)
+
+open_forest_mean_sl_wet <- open_forest_mvmt_wet$updated_shape * open_forest_mvmt_wet$updated_scale
+
+# tree_grass
+tree_grass_mvmt_wet <- data.frame(
+  "pheno" = "TreeGrass",
+  "updated_shape" = tentative_shape + log_sl_wet_mvmt_mvparams$nat_coef[1] + log_sl_wet_mvmt_mvparams$nat_coef[5],
+  "updated_scale" = 1/((1/tentative_scale) - (sl_wet_mvmt_mvparams$nat_coef[1] + sl_wet_mvmt_mvparams$nat_coef[5])),
+  "updated_kappa" = tentative_kappa + cos_ta_wet_mvmt_mvparams$nat_coef[1] + cos_ta_wet_mvmt_mvparams$nat_coef[5]
+)
+
+tree_grass_mean_sl_wet <- tree_grass_mvmt_wet$updated_shape * tree_grass_mvmt_wet$updated_scale
+
+```
+
+### Creating Gamma distributions 
+
+```{r}
+
+sl_wet_mvmt <- data.frame(x = seq(0, sl_extent, length.out = 1001))
+
+# Tentative distribution
+sl_wet_mvmt$Tentative <- dgamma(x = sl_wet_mvmt$x,
+                                shape = tentative_shape,
+                                scale = tentative_scale)
+# Shrub grass
+sl_wet_mvmt$ShrubGrass <- dgamma(x = sl_wet_mvmt$x,
+                                 shape = shrub_grass_mvmt_wet$updated_shape,
+                                 scale = shrub_grass_mvmt_wet$updated_scale)
+# Bare ground
+sl_wet_mvmt$Floodplain <- dgamma(x = sl_wet_mvmt$x,
+                                 shape = floodplain_mvmt_wet$updated_shape,
+                                 scale = floodplain_mvmt_wet$updated_scale)
+# Dry grassland
+sl_wet_mvmt$DryGrassland <- dgamma(x = sl_wet_mvmt$x,
+                                   shape = dry_grassland_mvmt_wet$updated_shape,
+                                   scale = dry_grassland_mvmt_wet$updated_scale)
+# Open forest
+sl_wet_mvmt$OpenForest <- dgamma(x = sl_wet_mvmt$x,
+                                 shape = open_forest_mvmt_wet$updated_shape,
+                                 scale = open_forest_mvmt_wet$updated_scale)
+# Tree grass
+sl_wet_mvmt$TreeGrass <- dgamma(x = sl_wet_mvmt$x,
+                                shape = tree_grass_mvmt_wet$updated_shape,
+                                scale = tree_grass_mvmt_wet$updated_scale)
+
+# Pivot from wide to long data
+sl_wet_mvmt <- sl_wet_mvmt %>% 
+  pivot_longer(cols = -x)
+
+sl_wet_mvmt$name <- factor(sl_wet_mvmt$name, levels = order)
+
+mean_values_wet <- c("ShrubGrass" = round(shrub_grass_mean_sl_wet, 1),
+                     "Floodplain" = round(floodplain_mean_sl_wet, 1), 
+                     "DryGrassland" = round(dry_grassland_mean_sl_wet, 1), 
+                     "OpenForest" = round(open_forest_mean_sl_wet, 1), 
+                     "TreeGrass" = round(tree_grass_mean_sl_wet, 1), 
+                     "Tentative" = round(tentative_mean_sl, 1))
+
+# Construct dynamic labels
+labels <- paste(names(mean_values_wet), ": Mean SL = ", mean_values_wet, sep = "")
+
+# Plot
+ggplot(sl_wet_mvmt, aes(x = x, y = value, color = factor(name), linetype = name)) +
+  geom_line(alpha = 0.75, linewidth = 1) +
+  scale_x_continuous("Step Length (m)", limits = c(0,1000)) +
+  scale_y_continuous("Probability Density", limits = c(0, 0.01)) +
+  scale_colour_manual("Habitat",
+                      values = c("ShrubGrass" = "#999900",
+                                 "Floodplain" = "#3399FF",
+                                 "DryGrassland" = "#CC9900",
+                                 "OpenForest" = "#006600",
+                                 "TreeGrass" = "#00CC66",
+                                 "Tentative" = "black"),
+                      labels = labels) +
+  scale_linetype_manual("Habitat", 
+                        values = c("ShrubGrass" = "solid", 
+                                   "Floodplain" = "solid", 
+                                   "DryGrassland" = "solid", 
+                                   "OpenForest" = "solid", 
+                                   "TreeGrass" = "solid", 
+                                   "Tentative" = "dotted"),
+                        labels = labels) +
+  # scale_colour_viridis_d("Habitat", option = "D") +
+  # ggtitle("Wet season") +
+  theme_bw() +
+  theme(legend.position = c(0.65, 0.65))
+
+ggsave(paste0("outputs/plots/pheno_model_mixed_diag_sl_wet_mvmt_", Sys.Date(), ".png"), device = "png", 
+       width = 150, height = 100, units = "mm", scale = 1, dpi = 1000)
+
+```
+
+### Creating von Mises distributions 
+
+```{r}
+#| warning= FALSE
+
+ta_wet_mvmt <- data.frame(x = seq(-pi, pi, length.out = 101))
+
+# Tentative distribution
+ta_wet_mvmt$Tentative <- circular::dvonmises(x = ta_wet_mvmt$x,
+                                             mu = 0,
+                                             kappa = tentative_kappa)
+# Shrub grass
+ta_wet_mvmt$ShrubGrass <- circular::dvonmises(x = ta_wet_mvmt$x,
+                                              mu = 0,
+                                              kappa = shrub_grass_mvmt_wet$updated_kappa)
+# Bare ground
+ta_wet_mvmt$Floodplain <- circular::dvonmises(x = ta_wet_mvmt$x,
+                                              mu = 0,
+                                              kappa = floodplain_mvmt_wet$updated_kappa)
+# Dry grassland
+ta_wet_mvmt$DryGrassland <- circular::dvonmises(x = ta_wet_mvmt$x,
+                                                mu = 0,
+                                                kappa = dry_grassland_mvmt_wet$updated_kappa)
+# Open forest
+ta_wet_mvmt$OpenForest <- circular::dvonmises(x = ta_wet_mvmt$x,
+                                              mu = 0,
+                                              kappa = open_forest_mvmt_wet$updated_kappa)
+# Tree grass
+ta_wet_mvmt$TreeGrass <- circular::dvonmises(x = ta_wet_mvmt$x,
+                                             mu = 0,
+                                             kappa = tree_grass_mvmt_wet$updated_kappa)
+
+# Pivot from wide to long data
+ta_wet_mvmt <- ta_wet_mvmt %>% 
+  pivot_longer(cols = -x)
+
+ta_wet_mvmt$name <- factor(ta_wet_mvmt$name, levels = order)
+
+# Plot
+ggplot(ta_wet_mvmt, aes(x = x, y = value, color = factor(name), linetype = name)) +
+  geom_line(alpha = 0.75, linewidth = 1) +
+  xlab("Turning angle (radians)") +
+  scale_y_continuous("Probability Density", limits = c(0.10, 0.215)) +
+  scale_x_continuous(breaks = c(-pi, -pi/2, 0, pi/2, pi),
+                     labels = c(expression(-pi, -pi/2, 0, pi/2, pi))) +
+  scale_colour_manual("Habitat",
+                      values = c("ShrubGrass" = "#999900",
+                                 "Floodplain" = "#3399FF",
+                                 "DryGrassland" = "#CC9900",
+                                 "OpenForest" = "#006600",
+                                 "TreeGrass" = "#00CC66",
+                                 "Tentative" = "black")) +
+  scale_linetype_manual("Habitat", 
+                        values = c("ShrubGrass" = "solid", 
+                                   "Floodplain" = "solid", 
+                                   "DryGrassland" = "solid", 
+                                   "OpenForest" = "solid", 
+                                   "TreeGrass" = "solid", 
+                                   "Tentative" = "dotted")) +
+  # scale_colour_viridis_d("Habitat", option = "D") +
+  # ggtitle("Dry season") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggsave(paste0("outputs/plots/pheno_model_mixed_diag_ta_wet_mvmt_", Sys.Date(), ".png"), device = "png", 
+       width = 150, height = 100, units = "mm", scale = 1, dpi = 600)
+
+```
+
+:::
+
+# Session Information
+
+```{r}
+
+sessionInfo()
+
+```
+
