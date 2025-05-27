@@ -1,0 +1,1093 @@
+---
+title: "iSSF Model Plotting"
+author: "Scott Forrest and Kyana Pike"
+date: "`r Sys.Date()`"
+execute: 
+  cache: false
+bibliography: references.bib
+toc: true
+number-sections: false
+format: 
+  html:
+    self-contained: true
+    code-fold: show
+    code-tools: true
+    df-print: paged
+    code-line-numbers: true
+    code-overflow: scroll
+    fig-format: png
+    fig-dpi: 300
+  pdf:
+    geometry: 
+      - top=30mm
+      - left=30mm
+editor:
+  source
+---
+
+Here we are plotting the results of integrated step selection function (iSSF) models fitted to water buffalo in Arnhem Land. These models contain the following continuous predictors:
+
+-   Monthly Normalised Difference Vegetation Index (NDVI)
+-   Monthly Normalised Difference Vegetation Index \^ 2 (NDVI\^2)
+-   Monthly Normalised Burn Ratio with monthly lag (either 0, 1, 2 or 3 months of lag) (NBR lag 0,1,2,3)
+-   Monthly Distance to water (water presence inferred from monthly Normalised Difference Water Index (NDWI) layer)
+-   Movement covariates to correct for bias in the iSSF model fitting, and can be used to update movement behaviour
+    -   Step length
+    -   Natural logarithm of the step length
+    -   Cosine of the turning angles
+
+# Load packages
+
+```{r}
+#| warning=FALSE
+
+library(tidyverse)
+library(glmmTMB)
+library(terra)
+library(RColorBrewer)
+library(lemon)
+
+```
+
+# Import data
+
+```{r}
+
+ssf_data <- read_csv("pheno_start_end_dat_NBR_lag_NAFImask_ssf10rs_2024-03-21.csv")
+
+```
+
+## Get scaling factors for the NDVI and NDVI^2 covariates
+
+```{r}
+
+ssf_data <- ssf_data %>% mutate(srtm_start_scaled = scale(srtm_start),
+                            srtm_end_scaled = scale(srtm_end),
+                            water_dist_start_scaled = scale(water_dist_start),
+                            water_dist_end_scaled = scale(water_dist_end),
+                            ndvi_start_scaled = scale(ndvi_start),
+                            ndvi_end_scaled = scale(ndvi_end),
+                            nbr_start_scaled = scale(nbr_start),
+                            nbr_end_scaled = scale(nbr_end),
+                            sl_scaled = scale(sl_),
+                            log_sl_scaled = scale(log_sl_),
+                            cos_ta_scaled = scale(cos_ta_)
+)
+
+# get scaling factors
+sl_scale_sd <- attr(ssf_data$sl_scaled, "scaled:scale")
+log_sl_scale_sd <- attr(ssf_data$log_sl_scaled, "scaled:scale")
+cos_ta_scale_sd <- attr(ssf_data$cos_ta_scaled, "scaled:scale")
+ndvi_scale_sd <- attr(ssf_data$ndvi_start_scaled, "scaled:scale")
+ndvi_scale_sd <- 0.1262109 # from line of code above
+
+```
+
+
+# Check the NBR layers and NAFI mask
+
+## Import layers
+
+```{r}
+
+nbr <- rast("nbr_raster_amt_cropped_epsg32753.tif")
+terra::time(nbr) <- as.POSIXct(lubridate::ymd("2018-01-01") + months(0:23))
+
+# the NAFI layers - monthly fires indicated by the value
+NAFI2018_cropped_resampled <- rast("NAFI2018_cropped_resampled_raster_epsg32753.tif")
+NAFI2019_cropped_resampled <- rast("NAFI2019_cropped_resampled_raster_epsg32753.tif")
+
+nbr2018_NAFImasked <- rast("nbr2018_NAFImask_epsg32753.tif")
+nbr2019_NAFImasked <- rast("nbr2019_NAFImask_epsg32753.tif")
+nbr_NAFImask <- c(nbr2018_NAFImasked, nbr2019_NAFImasked)
+
+```
+
+## Plot the NAFI layers
+
+::: panel-tabset
+## 2018
+
+```{r}
+plot(NAFI2018_cropped_resampled, col = rev(brewer.pal(10, "RdBu")))
+```
+
+## 2019
+
+```{r}
+plot(NAFI2019_cropped_resampled, col = rev(brewer.pal(10, "RdBu")))
+```
+:::
+
+## Plot the NBR layers and NAFI masked layers
+
+Create a colour scheme
+
+```{r}
+colours <- rev(brewer.pal(11, "RdBu"))
+```
+
+::: panel-tabset
+
+## NBR no mask
+
+```{r}
+
+for(i in 1:nlyr(nbr)) terra::plot(nbr[[i]], 
+                                  col = colours, 
+                                  # breaks = seq(-1,1, length.out = length(colours) + 1),
+                                  breaks = c(-1, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1),
+                                  main = paste0("dNBR ", time(nbr[[i]])))
+
+```
+
+## NBR NAFI mask
+
+```{r}
+
+for(i in 1:nlyr(nbr_NAFImask)) terra::plot(nbr_NAFImask[[i]], 
+                                           col = colours, 
+                                           # breaks = seq(-1,1, length.out = length(colours) + 1),
+                                           breaks = c(-1, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1),
+                                           main = paste0("dNBR NAFImask ", time(nbr_NAFImask[[i]])))
+
+```
+:::
+
+# Load fitted model objects
+
+These models were fitted with the `glmmTMB` package, and have a lag to the NBR covariate of 0, 1, 2 or 3 months.
+
+::: panel-tabset
+
+## Dry season - NAFI NBR mask
+
+```{r}
+
+dry_lag0 <- readRDS("fitted_models/buffalo_ssf10rs_dry_nbrNAFI_lag0_2024-06-13.rds")
+dry_lag1 <- readRDS("fitted_models/buffalo_ssf10rs_dry_nbr_NAFImask_lag1_2024-06-13.rds")
+dry_lag2 <- readRDS("fitted_models/buffalo_ssf10rs_dry_nbr_NAFImask_lag2_2024-06-13.rds")
+dry_lag3 <- readRDS("fitted_models/buffalo_ssf10rs_dry_nbr_NAFImask_lag3_2024-06-13.rds")
+
+```
+
+## Wet season - NAFI NBR mask
+
+```{r}
+
+wet_lag0 <- readRDS("fitted_models/buffalo_ssf10rs_wet_nbrNAFI_lag0_2024-06-13.rds")
+wet_lag1 <- readRDS("fitted_models/buffalo_ssf10rs_wet_nbr_NAFImask_lag1_2024-06-13.rds")
+wet_lag2 <- readRDS("fitted_models/buffalo_ssf10rs_wet_nbr_NAFImask_lag2_2024-06-13.rds")
+wet_lag3 <- readRDS("fitted_models/buffalo_ssf10rs_wet_nbr_NAFImask_lag3_2024-06-13.rds")
+
+```
+:::
+
+# Check model outputs
+
+## Dry season - NBR mask
+
+::: panel-tabset
+## NBR Lag 0
+
+```{r}
+dry_lag0 <- glmmTMB::up2date(dry_lag0)
+summary(dry_lag0)
+```
+
+## NBR Lag 1
+
+```{r}
+dry_lag1 <- glmmTMB::up2date(dry_lag1) # as model was fitted with older version of glmmTMB
+summary(dry_lag1)
+```
+
+## NBR Lag 2
+
+```{r}
+dry_lag2 <- glmmTMB::up2date(dry_lag2) # as model was fitted with older version of glmmTMB
+summary(dry_lag2)
+```
+
+## NBR Lag 3
+
+```{r}
+dry_lag3 <- glmmTMB::up2date(dry_lag3) # as model was fitted with older version of glmmTMB
+summary(dry_lag3)
+```
+
+:::
+
+## Wet season - NBR mask
+
+::: panel-tabset
+
+## NBR Lag 0
+
+```{r}
+wet_lag0 <- glmmTMB::up2date(wet_lag0) # as model was fitted with older version of glmmTMB
+summary(wet_lag0)
+```
+
+## NBR Lag 1
+
+```{r}
+wet_lag1 <- glmmTMB::up2date(wet_lag1) # as model was fitted with older version of glmmTMB
+summary(wet_lag1)
+```
+
+## NBR Lag 2
+
+```{r}
+wet_lag2 <- glmmTMB::up2date(wet_lag2) # as model was fitted with older version of glmmTMB
+summary(wet_lag2)
+```
+
+## NBR Lag 3
+
+```{r}
+wet_lag3 <- glmmTMB::up2date(wet_lag3) # as model was fitted with older version of glmmTMB
+summary(wet_lag3)
+```
+
+:::
+
+# Create dataframes to plot the coefficients
+
+::: panel-tabset
+
+## Dry season - NBR mask
+
+```{r}
+
+coef_df_dry_lag0 <- data.frame("model" = "dry_lag0", 
+                      "model_covariate" = names(fixef(dry_lag0)$cond),
+                      "Covariate" = c("NDVI", "NDVI^2", "NBR", "DistanceToWater", "sl", "log(sl)", "cos(ta)"),
+                      "Estimate" = coef(summary(dry_lag0))$cond[, "Estimate"],
+                      "SE" = coef(summary(dry_lag0))$cond[, "Std. Error"]
+                      ) 
+
+coef_df_dry_lag1 <- data.frame("model" = "dry_lag1", 
+                      "model_covariate" = names(fixef(dry_lag1)$cond),
+                      "Covariate" = c("NDVI", "NDVI^2", "NBR", "DistanceToWater", "sl", "log(sl)", "cos(ta)"),
+                      "Estimate" = coef(summary(dry_lag1))$cond[, "Estimate"],
+                      "SE" = coef(summary(dry_lag1))$cond[, "Std. Error"]
+                      )
+
+coef_df_dry_lag2 <- data.frame("model" = "dry_lag2", 
+                      "model_covariate" = names(fixef(dry_lag2)$cond),
+                      "Covariate" = c("NDVI", "NDVI^2", "NBR", "DistanceToWater", "sl", "log(sl)", "cos(ta)"),
+                      "Estimate" = coef(summary(dry_lag2))$cond[, "Estimate"],
+                      "SE" = coef(summary(dry_lag2))$cond[, "Std. Error"]
+                      )
+
+coef_df_dry_lag3 <- data.frame("model" = "dry_lag3", 
+                      "model_covariate" = names(fixef(dry_lag3)$cond),
+                      "Covariate" = c("NDVI", "NDVI^2", "NBR", "DistanceToWater", "sl", "log(sl)", "cos(ta)"),
+                      "Estimate" = coef(summary(dry_lag3))$cond[, "Estimate"],
+                      "SE" = coef(summary(dry_lag3))$cond[, "Std. Error"]
+                      )
+
+coef_df_dry <- rbind(coef_df_dry_lag0, coef_df_dry_lag1, coef_df_dry_lag2, coef_df_dry_lag3)
+
+coef_df_dry <- coef_df_dry %>%
+  
+  mutate(
+    # Calculate confidence intervals
+    LCI_90 = Estimate - qnorm(1 - (1 - 0.90) / 2) * SE, 
+    UCI_90 = Estimate + qnorm(1 - (1 - 0.90) / 2) * SE,
+    LCI_95 = Estimate - qnorm(1 - (1 - 0.95) / 2) * SE,
+    UCI_95 = Estimate + qnorm(1 - (1 - 0.95) / 2) * SE,
+    LCI_99 = Estimate - qnorm(1 - (1 - 0.99) / 2) * SE,
+    UCI_99 = Estimate + qnorm(1 - (1 - 0.99) / 2) * SE,
+    # Compute p-values
+    pvalue = 2 * pnorm(-abs(Estimate) / SE)
+  )
+
+# Add stars indicating the significance
+coef_df_dry$Significance <- sapply(1:nrow(coef_df_dry), function(x){
+  if (coef_df_dry$pvalue[x] <= 0.001){
+    return("***")
+  } else if (coef_df_dry$pvalue[x] <= 0.01) {
+    return("**")
+  } else if (coef_df_dry$pvalue[x] <= 0.05) {
+    return("*")
+  }
+})
+
+# Remove the intercept term
+coef_df_dry <- coef_df_dry %>% filter(Covariate != "Intercept")
+
+# Add a column indicating the preference
+coef_df_dry$Preference <- ifelse(coef_df_dry$Estimate > 0, "Preferred", "Avoided")
+coef_df_dry$Preference <- factor(coef_df_dry$Preference, levels = c("Avoided", "Preferred"))
+
+
+```
+
+### Prepare data frame for plotting
+
+Specify the order in which the coefficients should be plotted
+
+```{r}
+
+order <- c(
+  "NDVI",
+  "NDVI^2",
+  "NBR",
+  "DistanceToWater",
+  "sl",
+  "log(sl)",
+  "cos(ta)"
+)
+
+```
+
+### Prepare dataset for plotting confidence intervals
+
+```{r}
+
+# Reverse the order of the 'model' factor levels
+coef_df_dry$model <- factor(coef_df_dry$model, levels = rev(levels(factor(coef_df_dry$model))))
+
+coef_df_dry2 <- coef_df_dry %>%
+  dplyr::select(model, Covariate, Estimate, Preference, LCI_90:UCI_99) %>%
+  gather(key = confidence_level, value = value, LCI_90:UCI_99) %>%
+  separate(col = confidence_level, into = c("Type", "Level"), sep = "_") %>%
+  spread(key = Type, value = value) %>%
+  mutate(Level = paste0(Level, "%"))
+
+```
+
+### Prepare plot with covariates on the y-axis and the estimates on the x-axis
+
+```{r}
+
+dry_nbr_lag_plot <- ggplot(data = coef_df_dry, 
+                           aes(y = Covariate, x = Estimate, col = factor(Preference), group = factor(model))) +
+  geom_vline(xintercept = 0, color = "black", lty = 2, lwd = 0.3) +
+  annotate(geom = "segment",
+           x      = -0.85, xend = 0.25,
+           y      = 3.5, yend   = 3.5,
+           colour = "gray80", lty = 1, lwd = 0.3) +
+  geom_point(shape = 3, size = 2.5, position = position_dodge(width = 0.5)) +
+  geom_errorbarh(data = coef_df_dry2,
+                 aes(xmin = LCI, xmax = UCI, linewidth = factor(Level)), 
+                 height = 0, alpha  = 0.5, position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = Significance, hjust = 0.5, vjust = 0), 
+            show.legend = F, position = position_dodge(width = 0.5)) +
+  scale_y_discrete(limits = rev(order)) +
+  theme_classic() +
+  scale_x_continuous(limits = c(-0.9, 0.25)) +
+  coord_capped_cart(left = "both", bottom = "both") +
+  labs(x = expression(beta*"-Estimate")) +
+  scale_color_manual(name   = "Preference", 
+                     values = c("#FF8123", "#9B4200")) +
+  scale_linewidth_manual(name   = "Confidence Level", 
+                         values = c(2, 1, 0.3)) +
+  theme(legend.position   = "bottom",
+        legend.margin     = margin(0, 50, 0, -20),
+        legend.box.margin = margin(-5, -10, -5, -10),
+        legend.text       = element_text(face = 3),
+        legend.title      = element_text(face = 3)) +
+  guides(colour = guide_legend(title.position = "top", title.hjust = 0.5),
+         linewidth   = guide_legend(title.position = "top", title.hjust = 0.5, 
+                                    override.aes = list(colour = "#FF8123")))
+
+dry_nbr_lag_plot
+
+# ggsave("outputs/plots/nbr_lag_model_dry.png", device = "png", 
+#        width = 150, height = 110, units = "mm", scale = 1, dpi = 1000)
+
+```
+
+### Most 'informative' model
+
+```{r}
+
+dry_nbr_lag_plot <- ggplot(data = coef_df_dry %>% filter(model == "dry_lag0"), 
+                           aes(y = Covariate, x = Estimate, col = factor(Preference), group = factor(model))) +
+  geom_vline(xintercept = 0, color = "black", lty = 2, lwd = 0.3) +
+  annotate(geom = "segment",
+           x      = -0.85, xend = 0.25,
+           y      = 3.5, yend   = 3.5,
+           colour = "gray80", lty = 1, lwd = 0.3) +
+  geom_point(shape = 3, size = 2.5, position = position_dodge(width = 0.5)) +
+  geom_errorbarh(data = coef_df_dry2 %>% filter(model == "dry_lag0"),
+                 aes(xmin = LCI, xmax = UCI, linewidth = factor(Level)), 
+                 height = 0, alpha  = 0.5, position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = Significance, hjust = 0.5, vjust = 0), 
+            show.legend = F, position = position_dodge(width = 0.5)) +
+  scale_y_discrete(limits = rev(order)) +
+  theme_classic() +
+  scale_x_continuous(limits = c(-0.9, 0.25)) +
+  coord_capped_cart(left = "both", bottom = "both") +
+  labs(x = expression(beta*"-Estimate")) +
+  scale_color_manual(name   = "Preference", 
+                     values = c("#FF8123", "#9B4200")) +
+  scale_linewidth_manual(name   = "Confidence Level", 
+                         values = c(2, 1, 0.3)) +
+  theme(legend.position   = "bottom",
+        legend.margin     = margin(0, 50, 0, -20),
+        legend.box.margin = margin(-5, -10, -5, -10),
+        legend.text       = element_text(face = 3),
+        legend.title      = element_text(face = 3)) +
+  guides(colour = guide_legend(title.position = "top", title.hjust = 0.5),
+         linewidth   = guide_legend(title.position = "top", title.hjust = 0.5, 
+                                    override.aes = list(colour = "#FF8123")))
+
+dry_nbr_lag_plot
+
+# ggsave("outputs/plots/nbr_lag_model_final_dry.png", device = "png", 
+#        width = 150, height = 70, units = "mm", scale = 1, dpi = 1000)
+
+```
+
+### NDVI quadratic curve
+
+Pull out the coefficients from the fitted model.
+
+```{r}
+
+best_nbr_model <- coef_df_dry %>% filter(model == "dry_lag0")
+ndvi_param <- best_nbr_model %>% filter(Covariate == "NDVI") %>% pull(Estimate) / ndvi_scale_sd
+ndvi_param_se <- best_nbr_model %>% filter(Covariate == "NDVI") %>% pull(SE) / ndvi_scale_sd
+ndvi2_param <- best_nbr_model %>% filter(Covariate == "NDVI^2") %>% pull(Estimate) / ndvi_scale_sd
+ndvi2_param_se <- best_nbr_model %>% filter(Covariate == "NDVI^2") %>% pull(SE) / ndvi_scale_sd
+
+```
+
+Create a dataframe of x and y values for the quadratic curve.
+
+```{r}
+
+ndvi_df <- data.frame("NDVI" = seq(-0.2, 0.8, 0.01))
+ndvi_df$NDVI2 <- ndvi_df$NDVI^2
+ndvi_df$response <- (ndvi_df$NDVI * ndvi_param) + (ndvi_df$NDVI2 * ndvi2_param)
+ndvi_df$RSS <- exp(ndvi_df$response)
+
+```
+
+Plot the quadratic curve
+
+```{r}
+
+ggplot() +
+  geom_hline(yintercept = 1, color = "black", lty = "dashed", lwd = 0.3) +
+  geom_line(data = ndvi_df, aes(x = NDVI, y = RSS), color = "#FF8123", size = 1) +
+  scale_y_continuous("Relative Selection Strength (RSS)") +
+  # scale_x_continuous("NDVI", limits = c(-0.1, 0.75)) +
+  theme_classic() 
+
+# ggsave("outputs/plots/ndvi_quadratic_curve_dry.png", device = "png", 
+#        width = 150, height = 70, units = "mm", scale = 1, dpi = 1000)
+
+
+```
+
+Calculate confidence intervals for the curve.
+
+Here we simulate the beta values for NDVI and NDVI^2, and calculate the RSS for each combination of beta values and NDVI values. We then calculate the 95% confidence intervals for the RSS values.
+
+```{r}
+
+# Number of simulations
+n_sim <- 10000
+
+# Simulate beta values
+ndvi_sim <- rnorm(n_sim, mean = ndvi_param, sd = ndvi_param_se)
+# hist(ndvi_sim)
+ndvi2_sim <- rnorm(n_sim, mean = ndvi2_param, sd = ndvi2_param_se)
+# hist(ndvi2_sim)
+
+# Define x values
+ndvi_values <- seq(-0.2, 0.8, length.out = 100)
+
+# Initialize matrix to store RSS simulations
+RSS_sim_matrix <- matrix(NA, nrow = n_sim, ncol = length(ndvi_values))
+
+# Calculate RSS for each simulated beta and x
+for (i in 1:length(ndvi_values)) {
+    RSS_sim_matrix[, i] <- exp(ndvi_sim * ndvi_values[i] + ndvi2_sim * ndvi_values[i]^2)
+}
+
+# Calculate confidence intervals for each x
+RSS_CI_lower <- apply(RSS_sim_matrix, 2, quantile, probs = 0.025)
+RSS_CI_upper <- apply(RSS_sim_matrix, 2, quantile, probs = 0.975)
+
+# Convert the matrix to a data frame
+RSS_sim_df <- as.data.frame(RSS_sim_matrix)
+
+# Add column names corresponding to x_values
+colnames(RSS_sim_df) <- paste0("x_", ndvi_values)
+
+# Add a simulation ID column
+RSS_sim_df$Simulation <- 1:n_sim
+
+# Reshape the data frame from wide to long format
+RSS_long_df <- pivot_longer(
+  RSS_sim_df,
+  cols = starts_with("x_"),
+  names_to = "x",
+  values_to = "RSS_sim"
+)
+
+# Remove the "x_" prefix and convert x to numeric
+RSS_long_df$x <- as.numeric(sub("x_", "", RSS_long_df$x))
+
+# Calculate mean and confidence intervals for each x
+RSS_summary <- RSS_long_df %>%
+  group_by(x) %>%
+  summarise(
+    RSS_mean = mean(RSS_sim),
+    Lower_CI = quantile(RSS_sim, probs = 0.025),
+    Lower_CI_50 = quantile(RSS_sim, probs = 0.25),
+    Upper_CI = quantile(RSS_sim, probs = 0.975),
+    Upper_CI_50 = quantile(RSS_sim, probs = 0.75)
+  )
+
+# Plot mean RSS with confidence intervals
+ggplot(RSS_summary, aes(x = x, y = RSS_mean)) +
+  geom_hline(yintercept = 1, color = "black", lty = "dashed", lwd = 0.3) +
+  geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), fill = "#FF8123", alpha = 0.15) +
+  geom_ribbon(aes(ymin = Lower_CI_50, ymax = Upper_CI_50), fill = "#FF8123", alpha = 0.15) +
+  geom_line(color = "#FF8123") +
+  labs(
+    # title = "Relative Selection Strength with 50% and 95% Confidence Intervals",
+    x = "NDVI",
+    y = "Relative Selection Strength (RSS)"
+  ) +
+  theme_bw()
+
+ggsave("outputs/plots/ndvi_quadratic_curve_CI_dry.png", device = "png",
+       width = 150, height = 100, units = "mm", scale = 1, dpi = 1000)
+
+```
+
+## Wet season - NBR mask
+
+```{r}
+
+coef_df_wet_lag0 <- data.frame("model" = "wet_lag0", 
+                      "model_covariate" = names(fixef(wet_lag0)$cond),
+                      "Covariate" = c("NDVI", "NDVI^2", "NBR", "DistanceToWater", "sl", "log(sl)", "cos(ta)"),
+                      "Estimate" = coef(summary(wet_lag0))$cond[, "Estimate"],
+                      "SE" = coef(summary(wet_lag0))$cond[, "Std. Error"]
+                      ) 
+
+coef_df_wet_lag1 <- data.frame("model" = "wet_lag1", 
+                      "model_covariate" = names(fixef(wet_lag1)$cond),
+                      "Covariate" = c("NDVI", "NDVI^2", "NBR", "DistanceToWater", "sl", "log(sl)", "cos(ta)"),
+                      "Estimate" = coef(summary(wet_lag1))$cond[, "Estimate"],
+                      "SE" = coef(summary(wet_lag1))$cond[, "Std. Error"]
+                      )
+
+coef_df_wet_lag2 <- data.frame("model" = "wet_lag2", 
+                      "model_covariate" = names(fixef(wet_lag2)$cond),
+                      "Covariate" = c("NDVI", "NDVI^2", "NBR", "DistanceToWater", "sl", "log(sl)", "cos(ta)"),
+                      "Estimate" = coef(summary(wet_lag2))$cond[, "Estimate"],
+                      "SE" = coef(summary(wet_lag2))$cond[, "Std. Error"]
+                      )
+
+coef_df_wet_lag3 <- data.frame("model" = "wet_lag3", 
+                      "model_covariate" = names(fixef(wet_lag3)$cond),
+                      "Covariate" = c("NDVI", "NDVI^2", "NBR", "DistanceToWater", "sl", "log(sl)", "cos(ta)"),
+                      "Estimate" = coef(summary(wet_lag3))$cond[, "Estimate"],
+                      "SE" = coef(summary(wet_lag3))$cond[, "Std. Error"]
+                      )
+
+coef_df_wet <- rbind(coef_df_wet_lag0, coef_df_wet_lag1, coef_df_wet_lag2, coef_df_wet_lag3)
+
+coef_df_wet <- coef_df_wet %>%
+  
+  mutate(
+    # Calculate confidence intervals
+    LCI_90 = Estimate - qnorm(1 - (1 - 0.90) / 2) * SE, 
+    UCI_90 = Estimate + qnorm(1 - (1 - 0.90) / 2) * SE,
+    LCI_95 = Estimate - qnorm(1 - (1 - 0.95) / 2) * SE,
+    UCI_95 = Estimate + qnorm(1 - (1 - 0.95) / 2) * SE,
+    LCI_99 = Estimate - qnorm(1 - (1 - 0.99) / 2) * SE,
+    UCI_99 = Estimate + qnorm(1 - (1 - 0.99) / 2) * SE,
+    # Compute p-values
+    pvalue = 2 * pnorm(-abs(Estimate) / SE)
+  )
+
+# Add stars indicating the significance
+coef_df_wet$Significance <- sapply(1:nrow(coef_df_wet), function(x){
+  if (coef_df_wet$pvalue[x] <= 0.001){
+    return("***")
+  } else if (coef_df_wet$pvalue[x] <= 0.01) {
+    return("**")
+  } else if (coef_df_wet$pvalue[x] <= 0.05) {
+    return("*")
+  }
+})
+
+# Remove the intercept term
+coef_df_wet <- coef_df_wet %>% filter(Covariate != "Intercept")
+
+# Add a column indicating the preference
+coef_df_wet$Preference <- ifelse(coef_df_wet$Estimate > 0, "Preferred", "Avoided")
+coef_df_wet$Preference <- factor(coef_df_wet$Preference, levels = c("Avoided", "Preferred"))
+
+```
+
+### Prepare confidence interval dataframe
+
+```{r}
+
+# Reverse the order of the 'model' factor levels
+coef_df_wet$model <- factor(coef_df_wet$model, levels = rev(levels(factor(coef_df_wet$model))))
+
+coef_df_wet2 <- coef_df_wet %>%
+  dplyr::select(model, Covariate, Estimate, Preference, LCI_90:UCI_99) %>%
+  gather(key = confidence_level, value = value, LCI_90:UCI_99) %>%
+  separate(col = confidence_level, into = c("Type", "Level"), sep = "_") %>%
+  spread(key = Type, value = value) %>%
+  mutate(Level = paste0(Level, "%"))
+
+```
+
+### Prepare plot with covariates on the y-axis and the estimates on the x-axis
+
+```{r}
+
+wet_nbr_lag_plot <- ggplot(data = coef_df_wet, 
+                           aes(y = Covariate, x = Estimate, col = factor(Preference), group = factor(model))) +
+  geom_vline(xintercept = 0, color = "black", lty = 2, lwd = 0.3) +
+  annotate(geom = "segment",
+           x      = -0.9, xend = 0.25,
+           y      = 3.5, yend   = 3.5,
+           colour = "gray80", lty = 1, lwd = 0.3) +
+  geom_point(shape = 3, size = 2.5, position = position_dodge(width = 0.5)) +
+  geom_errorbarh(data = coef_df_wet2,
+                 aes(xmin = LCI, xmax = UCI, linewidth = factor(Level)), 
+                 height = 0, alpha  = 0.5, position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = Significance, hjust = 0.5, vjust = 0), 
+            show.legend = F, position = position_dodge(width = 0.5)) +
+  scale_y_discrete(limits = rev(order)) +
+  theme_classic() +
+  scale_x_continuous(limits = c(-0.9, 0.25)) +
+  coord_capped_cart(left = "both", bottom = "both") +
+  labs(x = expression(beta*"-Estimate")) +
+  scale_color_manual(name   = "Preference", 
+                     values = c("#238DFF", "#004691")) +
+  scale_linewidth_manual(name   = "Confidence Level", 
+                         values = c(2, 1, 0.3)) +
+  theme(legend.position   = "bottom",
+        legend.margin     = margin(0, 50, 0, -20),
+        legend.box.margin = margin(-5, -10, -5, -10),
+        legend.text       = element_text(face = 3),
+        legend.title      = element_text(face = 3)) +
+  guides(colour = guide_legend(title.position = "top", title.hjust = 0.5),
+         linewidth   = guide_legend(title.position = "top", title.hjust = 0.5, 
+                                    override.aes = list(colour = "#1377E2")))
+
+wet_nbr_lag_plot
+
+# ggsave("outputs/plots/nbr_lag_model_wet.png", device = "png", 
+#        width = 150, height = 110, units = "mm", scale = 1, dpi = 1000)
+
+```
+
+### Most 'informative' model
+
+```{r}
+
+wet_nbr_lag_plot <- ggplot(data = coef_df_wet %>% filter(model == "wet_lag2"), 
+                           aes(y = Covariate, x = Estimate, col = factor(Preference), group = factor(model))) +
+  geom_vline(xintercept = 0, color = "black", lty = 2, lwd = 0.3) +
+  annotate(geom = "segment",
+           x      = -0.9, xend = 0.25,
+           y      = 3.5, yend   = 3.5,
+           colour = "gray80", lty = 1, lwd = 0.3) +
+  geom_point(shape = 3, size = 2.5, position = position_dodge(width = 0.5)) +
+  geom_errorbarh(data = coef_df_wet2 %>% filter(model == "wet_lag2"),
+                 aes(xmin = LCI, xmax = UCI, linewidth = factor(Level)), 
+                 height = 0, alpha  = 0.5, position = position_dodge(width = 0.5)) +
+  geom_text(aes(label = Significance, hjust = 0.5, vjust = 0), 
+            show.legend = F, position = position_dodge(width = 0.5)) +
+  scale_y_discrete(limits = rev(order)) +
+  theme_classic() +
+  scale_x_continuous(limits = c(-0.9, 0.25)) +
+  coord_capped_cart(left = "both", bottom = "both") +
+  labs(x = expression(beta*"-Estimate")) +
+  scale_color_manual(name   = "Preference", 
+                     values = c("#238DFF", "#004691")) +
+  scale_linewidth_manual(name   = "Confidence Level", 
+                         values = c(2, 1, 0.3)) +
+  theme(legend.position   = "bottom",
+        legend.margin     = margin(0, 50, 0, -20),
+        legend.box.margin = margin(-5, -10, -5, -10),
+        legend.text       = element_text(face = 3),
+        legend.title      = element_text(face = 3)) +
+  guides(colour = guide_legend(title.position = "top", title.hjust = 0.5),
+         linewidth   = guide_legend(title.position = "top", title.hjust = 0.5, 
+                                    override.aes = list(colour = "#1377E2")))
+
+wet_nbr_lag_plot
+
+# ggsave("outputs/plots/nbr_lag_model_final_wet.png", device = "png", 
+#        width = 150, height = 70, units = "mm", scale = 1, dpi = 1000)
+
+```
+
+### NDVI quadratic curve
+
+Pull out the coefficients from the fitted model.
+
+```{r}
+
+best_nbr_model <- coef_df_wet %>% filter(model == "wet_lag0")
+ndvi_param <- best_nbr_model %>% filter(Covariate == "NDVI") %>% pull(Estimate) / ndvi_scale_sd
+ndvi_param_se <- best_nbr_model %>% filter(Covariate == "NDVI") %>% pull(SE) / ndvi_scale_sd
+ndvi2_param <- best_nbr_model %>% filter(Covariate == "NDVI^2") %>% pull(Estimate) / ndvi_scale_sd
+ndvi2_param_se <- best_nbr_model %>% filter(Covariate == "NDVI^2") %>% pull(SE) / ndvi_scale_sd
+
+```
+
+Create a dataframe of x and y values for the quadratic curve.
+
+```{r}
+
+ndvi_df <- data.frame("NDVI" = seq(-0.2, 0.8, 0.01))
+ndvi_df$NDVI2 <- ndvi_df$NDVI^2
+ndvi_df$response <- (ndvi_df$NDVI * ndvi_param) + (ndvi_df$NDVI2 * ndvi2_param)
+ndvi_df$RSS <- exp(ndvi_df$response)
+
+```
+
+Plot the quadratic curve.
+
+```{r}
+
+ggplot() +
+  geom_hline(yintercept = 1, color = "black", lty = "dashed", lwd = 0.3) +
+  geom_line(data = ndvi_df, aes(x = NDVI, y = RSS), color = "#1377E2", size = 1) +
+  scale_y_continuous("Relative Selection Strength (RSS)") +
+  # scale_x_continuous("NDVI", limits = c(-0.25, 0.75)) +
+  theme_classic() 
+
+# ggsave("outputs/plots/ndvi_quadratic_curve_wet.png", device = "png", 
+#        width = 150, height = 70, units = "mm", scale = 1, dpi = 1000)
+
+```
+Calculate confidence intervals for the curve.
+
+Here we simulate the beta values for NDVI and NDVI^2, and calculate the RSS for each combination of beta values and NDVI values. We then calculate the 95% confidence intervals for the RSS values.
+
+```{r}
+
+# Number of simulations
+n_sim <- 10000
+
+# Simulate beta values
+ndvi_sim <- rnorm(n_sim, mean = ndvi_param, sd = ndvi_param_se)
+# hist(ndvi_sim)
+ndvi2_sim <- rnorm(n_sim, mean = ndvi2_param, sd = ndvi2_param_se)
+# hist(ndvi2_sim)
+
+# Define x values
+ndvi_values <- seq(-0.2, 0.8, length.out = 100)
+
+# Initialize matrix to store RSS simulations
+RSS_sim_matrix <- matrix(NA, nrow = n_sim, ncol = length(ndvi_values))
+
+# Calculate RSS for each simulated beta and x
+for (i in 1:length(ndvi_values)) {
+    RSS_sim_matrix[, i] <- exp(ndvi_sim * ndvi_values[i] + ndvi2_sim * ndvi_values[i]^2)
+}
+
+# Calculate confidence intervals for each x
+RSS_CI_lower <- apply(RSS_sim_matrix, 2, quantile, probs = 0.025)
+RSS_CI_upper <- apply(RSS_sim_matrix, 2, quantile, probs = 0.975)
+
+# Convert the matrix to a data frame
+RSS_sim_df <- as.data.frame(RSS_sim_matrix)
+
+# Add column names corresponding to x_values
+colnames(RSS_sim_df) <- paste0("x_", ndvi_values)
+
+# Add a simulation ID column
+RSS_sim_df$Simulation <- 1:n_sim
+
+# Reshape the data frame from wide to long format
+RSS_long_df <- pivot_longer(
+  RSS_sim_df,
+  cols = starts_with("x_"),
+  names_to = "x",
+  values_to = "RSS_sim"
+)
+
+# Remove the "x_" prefix and convert x to numeric
+RSS_long_df$x <- as.numeric(sub("x_", "", RSS_long_df$x))
+
+# Calculate mean and confidence intervals for each x
+RSS_summary <- RSS_long_df %>%
+  group_by(x) %>%
+  summarise(
+    RSS_mean = mean(RSS_sim),
+    Lower_CI = quantile(RSS_sim, probs = 0.025),
+    Lower_CI_50 = quantile(RSS_sim, probs = 0.25),
+    Upper_CI = quantile(RSS_sim, probs = 0.975),
+    Upper_CI_50 = quantile(RSS_sim, probs = 0.75)
+  )
+
+# Plot mean RSS with confidence intervals
+ggplot(RSS_summary, aes(x = x, y = RSS_mean)) +
+  geom_hline(yintercept = 1, color = "black", lty = "dashed", lwd = 0.3) +
+  geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), fill = "#1377E2", alpha = 0.15) +
+  geom_ribbon(aes(ymin = Lower_CI_50, ymax = Upper_CI_50), fill = "#1377E2", alpha = 0.15) +
+  geom_line(color = "#1377E2") +
+  labs(
+    # title = "Relative Selection Strength with 50% and 95% Confidence Intervals",
+    x = "NDVI",
+    y = "Relative Selection Strength (RSS)"
+  ) +
+  theme_bw()
+
+ggsave("outputs/plots/ndvi_quadratic_curve_CI_wet.png", device = "png",
+       width = 150, height = 100, units = "mm", scale = 1, dpi = 1000)
+
+```
+
+:::
+
+# Checking used vs avilable distributions
+
+# NDVI
+
+```{r}
+
+# bin the ssf_data$nbr_end values
+# ssf_data$ndvi_end_bin <- cut(ssf_data$ndvi_end, breaks = c(-1, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1))
+ssf_data$ndvi_end_bin <- cut(ssf_data$ndvi_end, breaks = seq(-1,1,0.1))
+ssf_data_plot <- ssf_data %>% filter(ndvi_end > -0.2 & ndvi_end < 0.8)
+
+# inspect the data for dry season 
+ssf_data_plot %>% 
+  filter(season == "dry") %>%
+  drop_na() %>% 
+  group_by(case_, ndvi_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(ndvi_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "NDVI", y = "Proportion", fill = "Case")+
+  ggtitle("Dry season")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+# inspect the data for wet season 
+ssf_data_plot %>% 
+  filter(season == "wet") %>%
+  drop_na() %>% 
+  group_by(case_, ndvi_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(ndvi_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "NDVI", y = "Proportion", fill = "Case")+
+  ggtitle("Wet season")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+```
+
+## NBR
+
+::: panel-tabset
+
+## No NBR lag
+
+```{r}
+
+# bin the ssf_data$nbr_end values
+ssf_data$nbr_lag_0_end_bin <- cut(ssf_data$nbr_lag_0_end, breaks = c(-1, -0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5, 1))
+
+# inspect the data for dry season 
+ssf_data %>% 
+  filter(season == "dry") %>%
+  drop_na() %>% 
+  group_by(case_, nbr_lag_0_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(nbr_lag_0_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "Case")+
+  ggtitle("Dry season - no NBR lag")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+# inspect the data for wet season 
+ssf_data %>% 
+  filter(season == "wet") %>%
+  drop_na() %>% 
+  group_by(case_, nbr_lag_0_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(nbr_lag_0_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "Case")+
+  ggtitle("Wet season - no NBR lag")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+```
+
+## 1 month NBR lag
+
+```{r}
+
+# bin the ssf_data$nbr_end values
+ssf_data$nbr_lag_1_end_bin <- cut(ssf_data$nbr_lag_1_end, breaks = c(-1, -0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5, 1))
+
+# inspect the data for dry season 
+ssf_data %>% 
+  filter(season == "dry") %>%
+  drop_na() %>% 
+  group_by(case_, nbr_lag_1_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(nbr_lag_1_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "Case")+
+  ggtitle("Dry season - 1 month NBR lag")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+# inspect the data for wet season 
+ssf_data %>% 
+  filter(season == "wet") %>%
+  drop_na() %>% 
+  group_by(case_, nbr_lag_1_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(nbr_lag_1_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "Case")+
+  ggtitle("Wet season - 1 month NBR lag")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+```
+
+## 2 month NBR lag
+
+```{r}
+
+# bin the ssf_data$nbr_end values
+ssf_data$nbr_lag_2_end_bin <- cut(ssf_data$nbr_lag_2_end, breaks = c(-1, -0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5, 1))
+
+# inspect the data for dry season 
+ssf_data %>% 
+  filter(season == "dry") %>%
+  drop_na() %>% 
+  group_by(case_, nbr_lag_2_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(nbr_lag_2_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "Case")+
+  ggtitle("Dry season - 2 month NBR lag")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+# inspect the data for wet season 
+ssf_data %>% 
+  filter(season == "wet") %>%
+  drop_na() %>% 
+  group_by(case_, nbr_lag_2_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(nbr_lag_2_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "Case")+
+  ggtitle("Wet season - 2 month NBR lag")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+```
+
+## 3 month NBR lag
+
+```{r}
+
+# bin the ssf_data$nbr_end values
+ssf_data$nbr_lag_3_end_bin <- cut(ssf_data$nbr_lag_3_end, breaks = c(-1, -0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5, 1))
+
+# inspect the data for dry season 
+ssf_data %>% 
+  filter(season == "dry") %>%
+  drop_na() %>% 
+  group_by(case_, nbr_lag_3_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(nbr_lag_3_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "Case")+
+  ggtitle("Dry season - 3 month NBR lag")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+# inspect the data for wet season 
+ssf_data %>% 
+  filter(season == "wet") %>%
+  drop_na() %>% 
+  group_by(case_, nbr_lag_3_end_bin) %>% 
+  summarize(n = n()) %>% 
+  mutate(prop = n / sum(n), 
+         label = paste0(round(prop * 100, 1), "%")) %>% 
+  ggplot(aes(nbr_lag_3_end_bin, prop, fill = case_, group=case_,label = label)) + 
+  geom_col(position = position_dodge2()) +
+  geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+  labs(x = "Land use class", y = "Proportion", fill = "Case")+
+  ggtitle("Wet season - 3 month NBR lag")+
+  scale_fill_brewer(palette = "Paired", name="case_", 
+                    breaks=c("FALSE", "TRUE"), labels=c("Available", "Used")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+```
+
+:::
+
+```{r}
+sessionInfo()
+```
